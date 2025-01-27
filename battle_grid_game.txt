@@ -1,0 +1,497 @@
+import tkinter as tk
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import random
+from collections import deque
+
+# =======================
+# 1. Imports and Configuration
+# =======================
+
+# Grid and Game Settings
+GRID_SIZE = 5  # Size of the grid (5x5)
+CELL_SIZE = 100  # Pixel size of each cell in the grid
+FRIENDLY_START_POS = [(0, 0)]  # Starting positions of friendly units
+ENEMY_START_POS = [(4, 4)]  # Starting positions of enemy units
+OBSTACLES = [(2, 2)]  # Positions of obstacles on the grid
+TARGET = (4, 0)  # Target position the friendly AI aims to reach
+
+# Training Hyperparameters
+LEARNING_RATE = 0.001  # Learning rate for the optimizer
+GAMMA = 0.99  # Discount factor for future rewards
+BATCH_SIZE = 64  # Number of samples per training batch
+MEMORY_SIZE = 10000  # Capacity of the replay memory
+EPOCHS = 1000  # Number of training epochs
+TURN_DELAY = 500  # Delay in milliseconds between turns
+
+# Exploration Parameters for Epsilon-Greedy Policy
+EPSILON_START = 1.0  # Initial exploration rate
+EPSILON_MIN = 0.01  # Minimum exploration rate
+EPSILON_DECAY = 0.995  # Decay rate for exploration
+
+# Actions
+ACTIONS = ['Left', 'Right', 'Up', 'Down']  # Possible actions
+ACTION_DICT = {
+    0: (0, -1),  # Left: Move left in the grid
+    1: (0, 1),   # Right: Move right in the grid
+    2: (-1, 0),  # Up: Move up in the grid
+    3: (1, 0)    # Down: Move down in the grid
+}
+
+# =======================
+# 2. Neural Network and Replay Memory
+# =======================
+
+# Neural Network Model for Friendly AI (DQN)
+class DQN(nn.Module):
+    def __init__(self, grid_size, num_actions):
+        super(DQN, self).__init__()
+        # First fully connected layer
+        self.fc1 = nn.Linear(grid_size * grid_size, 128)
+        # Second fully connected layer
+        self.fc2 = nn.Linear(128, 128)
+        # Output layer: one output per possible action
+        self.fc3 = nn.Linear(128, num_actions)
+    
+    def forward(self, x):
+        # Pass input through first layer with ReLU activation
+        x = torch.relu(self.fc1(x))
+        # Pass through second layer with ReLU activation
+        x = torch.relu(self.fc2(x))
+        # Output layer (no activation; raw scores for each action)
+        return self.fc3(x)
+
+# Experience Replay Memory
+class ReplayMemory:
+    def __init__(self, capacity):
+        self.memory = deque(maxlen=capacity)  # Initialize deque with maximum capacity
+    
+    def push(self, state, action, reward, next_state, done):
+        """Store a transition in the replay memory."""
+        self.memory.append((state, action, reward, next_state, done))
+    
+    def sample(self, batch_size):
+        """Sample a random batch of transitions."""
+        return random.sample(self.memory, batch_size)
+    
+    def __len__(self):
+        """Return the current size of internal memory."""
+        return len(self.memory)
+
+# =======================
+# 3. State Encoding and Position Generation
+# =======================
+
+# Game State Encoding
+def encode_state(grid_size, friendly_pos, enemy_pos, obstacles, target):
+    """
+    Encodes the current game state into a flattened numpy array.
+    
+    Parameters:
+        grid_size (int): Size of the grid.
+        friendly_pos (list of tuples): Positions of friendly units.
+        enemy_pos (list of tuples): Positions of enemy units.
+        obstacles (list of tuples): Positions of obstacles.
+        target (tuple): Position of the target.
+    
+    Returns:
+        numpy.ndarray: Flattened array representing the game state.
+    """
+    state = np.zeros((grid_size, grid_size))  # Initialize grid with zeros
+    
+    # Mark friendly units with 1
+    for f in friendly_pos:
+        state[f] = 1
+    
+    # Mark enemy units with -1
+    for e in enemy_pos:
+        state[e] = -1
+    
+    # Mark obstacles with -2
+    for o in obstacles:
+        state[o] = -2
+    
+    # Mark target with 2
+    state[target] = 2
+    
+    return state.flatten()  # Flatten the grid into a 1D array
+
+# Ensure positions do not overlap with obstacles, target, or each other
+def generate_random_position(exclude_positions):
+    """
+    Generates a random position on the grid that does not overlap with excluded positions.
+    
+    Parameters:
+        exclude_positions (set of tuples): Positions to avoid.
+    
+    Returns:
+        tuple: A valid (x, y) position on the grid.
+    """
+    while True:
+        pos = (np.random.randint(0, GRID_SIZE), np.random.randint(0, GRID_SIZE))  # Random position
+        if pos not in exclude_positions:
+            return pos  # Valid position found
+
+# =======================
+# 4. Training the Friendly AI Using DQN
+# =======================
+
+# Train the Friendly AI using DQN
+def train_friendly_ai():
+    """
+    Trains the Friendly AI using Deep Q-Learning.
+    
+    Returns:
+        DQN: The trained neural network model.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Use GPU if available
+    model = DQN(GRID_SIZE, len(ACTIONS)).to(device)  # Initialize the DQN model
+    target_model = DQN(GRID_SIZE, len(ACTIONS)).to(device)  # Initialize the target network
+    target_model.load_state_dict(model.state_dict())  # Copy weights from main model to target
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)  # Optimizer for training
+    criterion = nn.MSELoss()  # Loss function
+    memory = ReplayMemory(MEMORY_SIZE)  # Initialize replay memory
+    epsilon = EPSILON_START  # Starting exploration rate
+    update_target_steps = 100  # Steps to update target network
+    step_count = 0  # Counter for steps taken
+
+    for epoch in range(1, EPOCHS + 1):
+        # Generate non-overlapping random positions for training
+        exclude = set(OBSTACLES + [TARGET])  # Positions to exclude
+        friendly_pos = generate_random_position(exclude)  # Generate friendly unit position
+        exclude.add(friendly_pos)  # Add to exclusion set
+        enemy_pos = [generate_random_position(exclude) for _ in ENEMY_START_POS]  # Generate enemy positions
+        
+        # Encode the current state
+        state = encode_state(GRID_SIZE, [friendly_pos], enemy_pos, OBSTACLES, TARGET)
+        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)  # Convert to tensor and add batch dimension
+        done = False  # Flag to indicate if the episode is over
+        total_reward = 0  # Accumulate rewards for the epoch
+
+        while not done:
+            step_count += 1  # Increment step counter
+            # Epsilon-greedy action selection
+            if random.random() < epsilon:
+                action = random.choice(range(len(ACTIONS)))  # Explore: random action
+            else:
+                with torch.no_grad():
+                    q_values = model(state)  # Get Q-values from the model
+                    action = torch.argmax(q_values).item()  # Exploit: choose best action
+            
+            # Execute action
+            move = ACTION_DICT[action]  # Get movement vector
+            new_friendly_pos = (friendly_pos[0] + move[0], friendly_pos[1] + move[1])  # Compute new position
+
+            # Check move validity
+            if (0 <= new_friendly_pos[0] < GRID_SIZE and
+                0 <= new_friendly_pos[1] < GRID_SIZE and
+                new_friendly_pos not in OBSTACLES and
+                new_friendly_pos not in enemy_pos):
+                next_friendly_pos = new_friendly_pos  # Valid move
+            else:
+                next_friendly_pos = friendly_pos  # Invalid move: stay in place
+
+            # Compute reward
+            if next_friendly_pos == TARGET:
+                reward = 10.0  # Reward for reaching the target
+                done = True  # Episode ends
+            else:
+                # Negative Manhattan distance as a penalty to encourage moving closer
+                distance = abs(next_friendly_pos[0] - TARGET[0]) + abs(next_friendly_pos[1] - TARGET[1])
+                reward = -distance
+
+            total_reward += reward  # Accumulate reward
+
+            # Encode the next state
+            next_state = encode_state(GRID_SIZE, [next_friendly_pos], enemy_pos, OBSTACLES, TARGET)
+            next_state = torch.tensor(next_state, dtype=torch.float32).unsqueeze(0).to(device)
+
+            # Store the experience in replay memory
+            memory.push(state, action, reward, next_state, done)
+            state = next_state  # Transition to the next state
+            friendly_pos = next_friendly_pos  # Update friendly position
+
+            # Learn from experiences if enough samples are available
+            if len(memory) >= BATCH_SIZE:
+                transitions = memory.sample(BATCH_SIZE)  # Sample a batch
+                batch_state, batch_action, batch_reward, batch_next_state, batch_done = zip(*transitions)
+
+                # Convert batches to tensors
+                batch_state = torch.cat(batch_state).to(device)
+                batch_action = torch.tensor(batch_action, dtype=torch.long).unsqueeze(1).to(device)
+                batch_reward = torch.tensor(batch_reward, dtype=torch.float32).unsqueeze(1).to(device)
+                batch_next_state = torch.cat(batch_next_state).to(device)
+                batch_done = torch.tensor(batch_done, dtype=torch.float32).unsqueeze(1).to(device)
+
+                # Compute current Q values
+                current_q = model(batch_state).gather(1, batch_action)
+
+                # Compute target Q values using the target network
+                with torch.no_grad():
+                    max_next_q = target_model(batch_next_state).max(1)[0].unsqueeze(1)
+                    target_q = batch_reward + (GAMMA * max_next_q * (1 - batch_done))
+
+                # Compute the loss between current and target Q values
+                loss = criterion(current_q, target_q)
+
+                # Optimize the model
+                optimizer.zero_grad()  # Clear previous gradients
+                loss.backward()  # Backpropagate the loss
+                optimizer.step()  # Update the model parameters
+
+            # Update the target network periodically
+            if step_count % update_target_steps == 0:
+                target_model.load_state_dict(model.state_dict())  # Sync target network
+
+        # Decay the exploration rate
+        if epsilon > EPSILON_MIN:
+            epsilon *= EPSILON_DECAY
+
+        # Print progress every 100 epochs
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch}/{EPOCHS}, Total Reward: {total_reward}, Epsilon: {epsilon:.4f}")
+
+    return model  # Return the trained model
+
+# =======================
+# 5. Tkinter Visualization and Game Logic
+# =======================
+
+# Tkinter Visualization
+class BattleGridGame:
+    def __init__(self, root, model):
+        """
+        Initializes the BattleGridGame.
+        
+        Parameters:
+            root (tk.Tk): The root Tkinter window.
+            model (DQN): The trained DQN model for the friendly AI.
+        """
+        self.root = root
+        self.model = model
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Device configuration
+
+        # Create the UI elements
+        self.turn_label = tk.Label(root, text="Friendly Turn", font=("Helvetica", 16), bg="#282c34", fg="white")
+        self.turn_label.pack()  # Display current turn
+        self.canvas = tk.Canvas(root, width=GRID_SIZE * CELL_SIZE, height=GRID_SIZE * CELL_SIZE, bg="#282c34")
+        self.canvas.pack()  # Canvas to draw the grid and units
+        self.score_label = tk.Label(root, text="Turns: 0", font=("Helvetica", 14), bg="#282c34", fg="white")
+        self.score_label.pack()  # Display turn count
+        self.win_label = None  # Placeholder for win message
+
+        # Initialize the game state
+        self.reset_game()
+
+    def reset_game(self):
+        """
+        Resets the game to the initial state.
+        """
+        self.friendly_units = FRIENDLY_START_POS.copy()  # Reset friendly units to starting positions
+        self.enemy_units = ENEMY_START_POS.copy()  # Reset enemy units to starting positions
+        self.running = True  # Game is active
+        self.turn_count = 0  # Reset turn counter
+        self.current_turn = "Friendly"  # Friendly starts first
+        self.draw_grid()  # Draw the grid layout
+        self.update_canvas()  # Update unit positions on the canvas
+
+    def draw_grid(self):
+        """
+        Draws the grid, obstacles, and target on the canvas.
+        """
+        self.canvas.delete("all")  # Clear previous drawings
+        for i in range(GRID_SIZE):
+            for j in range(GRID_SIZE):
+                # Draw each cell as a rectangle
+                self.canvas.create_rectangle(
+                    j * CELL_SIZE, i * CELL_SIZE,
+                    (j + 1) * CELL_SIZE, (i + 1) * CELL_SIZE,
+                    outline="#ffffff", fill="#3a3f47"  # Grid cell colors
+                )
+        for o in OBSTACLES:
+            # Draw obstacles as filled rectangles
+            self.canvas.create_rectangle(
+                o[1] * CELL_SIZE, o[0] * CELL_SIZE,
+                (o[1] + 1) * CELL_SIZE, (o[0] + 1) * CELL_SIZE,
+                fill="#808080"  # Obstacle color
+            )
+        # Draw the target as a gold-colored rectangle
+        self.canvas.create_rectangle(
+            TARGET[1] * CELL_SIZE, TARGET[0] * CELL_SIZE,
+            (TARGET[1] + 1) * CELL_SIZE, (TARGET[0] + 1) * CELL_SIZE,
+            fill="gold"
+        )
+
+    def update_canvas(self):
+        """
+        Updates the positions of friendly and enemy units on the canvas.
+        """
+        self.canvas.delete("friendly")  # Remove previous friendly units
+        self.canvas.delete("enemy")  # Remove previous enemy units
+        for f in self.friendly_units:
+            # Draw friendly units as blue ovals
+            self.canvas.create_oval(
+                f[1] * CELL_SIZE + 20, f[0] * CELL_SIZE + 20,
+                (f[1] + 1) * CELL_SIZE - 20, (f[0] + 1) * CELL_SIZE - 20,
+                fill="#00bfff", outline="#ffffff", width=2, tags="friendly"
+            )
+        for e in self.enemy_units:
+            # Draw enemy units as red ovals
+            self.canvas.create_oval(
+                e[1] * CELL_SIZE + 20, e[0] * CELL_SIZE + 20,
+                (e[1] + 1) * CELL_SIZE - 20, (e[0] + 1) * CELL_SIZE - 20,
+                fill="#ff4500", outline="#ffffff", width=2, tags="enemy"
+            )
+        self.score_label.config(text=f"Turns: {self.turn_count}")  # Update turn count display
+
+    def move_unit(self, unit, action):
+        """
+        Moves a unit based on the specified action if the move is valid.
+        
+        Parameters:
+            unit (tuple): Current (x, y) position of the unit.
+            action (int): Action index indicating the direction to move.
+        
+        Returns:
+            tuple: New (x, y) position after the move.
+        """
+        dx, dy = ACTION_DICT[action]  # Get movement vector based on action
+        new_x, new_y = unit[0] + dx, unit[1] + dy  # Calculate new position
+        if (0 <= new_x < GRID_SIZE and
+            0 <= new_y < GRID_SIZE and
+            (new_x, new_y) not in OBSTACLES):
+            # Prevent moving into cells occupied by friendly or enemy units
+            if (new_x, new_y) not in self.friendly_units and (new_x, new_y) not in self.enemy_units:
+                return (new_x, new_y)  # Valid move
+        return unit  # Invalid move: stay in place
+
+    def ai_turn(self):
+        """
+        Handles the Friendly AI's turn by selecting and executing actions based on the trained model.
+        """
+        self.turn_label.config(text="Friendly Turn")  # Update turn label
+        for i, unit in enumerate(self.friendly_units):
+            # Encode the current state for the friendly unit
+            state = encode_state(GRID_SIZE, [unit], self.enemy_units, OBSTACLES, TARGET)
+            state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)  # Convert to tensor
+            with torch.no_grad():
+                action_scores = self.model(state_tensor)  # Get Q-values from the model
+            action = torch.argmax(action_scores[0]).item()  # Select the action with the highest Q-value
+            new_position = self.move_unit(unit, action)  # Attempt to move based on the action
+
+            # Fallback heuristic if no valid move was made
+            if new_position == unit:
+                print("Fallback to heuristic for friendly unit")
+                target_x, target_y = TARGET
+                dx = target_x - unit[0]
+                dy = target_y - unit[1]
+                if abs(dx) > abs(dy):
+                    action = 3 if dx > 0 else 2  # Prefer Down or Up
+                else:
+                    action = 1 if dy > 0 else 0  # Prefer Right or Left
+                new_position = self.move_unit(unit, action)  # Attempt fallback move
+
+            self.friendly_units[i] = new_position  # Update friendly unit position
+
+    def enemy_turn(self):
+        """
+        Handles the Enemy's turn by moving enemy units towards the closest friendly units.
+        """
+        self.turn_label.config(text="Enemy Turn")  # Update turn label
+        for i, unit in enumerate(self.enemy_units):
+            if not self.friendly_units:
+                break  # No friendly units left to target
+            # Calculate Manhattan distances to all friendly units
+            distances = [abs(unit[0] - f[0]) + abs(unit[1] - f[1]) for f in self.friendly_units]
+            nearest_index = np.argmin(distances)  # Index of the closest friendly unit
+            nearest_friendly = self.friendly_units[nearest_index]  # Position of the closest friendly unit
+            dx = nearest_friendly[0] - unit[0]
+            dy = nearest_friendly[1] - unit[1]
+
+            # Decide movement direction based on distance
+            if abs(dx) > abs(dy):
+                action = 3 if dx > 0 else 2  # Move Down or Up
+            else:
+                action = 1 if dy > 0 else 0  # Move Right or Left
+
+            new_position = self.move_unit(unit, action)  # Attempt to move towards the friendly unit
+
+            # Fallback to a random move if stuck
+            if new_position == unit:
+                print("Fallback to random move for enemy")
+                action = random.choice(range(len(ACTIONS)))  # Choose a random action
+                new_position = self.move_unit(unit, action)  # Attempt random move
+
+            self.enemy_units[i] = new_position  # Update enemy unit position
+
+            # Check if the enemy has captured a friendly unit
+            if self.enemy_units[i] in self.friendly_units:
+                print(f"Enemy at {self.enemy_units[i]} has captured a friendly unit.")
+                self.friendly_units.remove(self.enemy_units[i])  # Remove the captured friendly unit
+
+    def display_win_message(self, message):
+        """
+        Displays a win message on the canvas.
+        
+        Parameters:
+            message (str): The message to display (e.g., "Friendly Wins!", "Enemy Wins!").
+        """
+        self.win_label = tk.Label(self.root, text=message, font=("Helvetica", 24, "bold"), bg="#282c34", fg="yellow")
+        self.win_label.place(relx=0.5, rely=0.5, anchor="center")  # Center the message on the screen
+
+    def check_victory(self):
+        """
+        Checks if either the Friendly AI has reached the target or if all friendly units have been captured.
+        
+        Returns:
+            str or None: Victory message if the game has ended; otherwise, None.
+        """
+        for unit in self.friendly_units:
+            if unit == TARGET:
+                self.running = False  # Stop the game
+                return "Friendly Wins!"  # Friendly AI reached the target
+
+        if not self.friendly_units:
+            self.running = False  # Stop the game
+            return "Enemy Wins!"  # All friendly units have been captured
+
+        return None  # Game continues
+
+    def next_turn(self):
+        """
+        Advances the game by executing the next turn for the current player (Friendly or Enemy).
+        """
+        if self.running:
+            self.turn_count += 1  # Increment turn counter
+            if self.current_turn == "Friendly":
+                self.ai_turn()  # Execute Friendly AI's turn
+                self.current_turn = "Enemy"  # Switch turn to Enemy
+            else:
+                self.enemy_turn()  # Execute Enemy's turn
+                self.current_turn = "Friendly"  # Switch turn to Friendly
+            self.update_canvas()  # Update the canvas with new positions
+            result = self.check_victory()  # Check for victory conditions
+            if result:
+                self.display_win_message(result)  # Display win message if game has ended
+                self.turn_label.config(text=result)  # Update turn label to show result
+            else:
+                self.root.after(TURN_DELAY, self.next_turn)  # Schedule the next turn after a delay
+
+# =======================
+# 6. Running the Game
+# =======================
+
+# Run the Game
+if __name__ == "__main__":
+    root = tk.Tk()  # Initialize the main Tkinter window
+    root.title("BattleGrid Game")  # Set window title
+    root.configure(bg="#282c34")  # Set background color
+    print("Training Friendly AI...")
+    train_friendly_ai()  # Train the Friendly AI
+    print("Training completed. Starting the game.")
+    trained_model = train_friendly_ai()  # Obtain the trained model
+    game = BattleGridGame(root, trained_model)  # Initialize the game with the trained model
+    game.next_turn()  # Start the first turn
+    root.mainloop()  # Enter the Tkinter event loop
