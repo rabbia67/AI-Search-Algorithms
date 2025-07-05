@@ -1,0 +1,506 @@
+import tkinter as tk
+import random
+import numpy as np
+
+# -------------------------------
+# Checkers Game with Learning Agent
+# -------------------------------
+
+# Board settings
+rows, cols = 8, 8  # Number of rows and columns on the board
+square_size = 60  # Size of each square in pixels
+
+# Initial board setup
+# 0: Empty square
+# 1: Player 1's regular piece
+# 2: Player 2's regular piece
+# 3: Player 1's king
+# 4: Player 2's king
+initial_board = [
+    [0, 1, 0, 1, 0, 1, 0, 1],
+    [1, 0, 1, 0, 1, 0, 1, 0],
+    [0, 1, 0, 1, 0, 1, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [2, 0, 2, 0, 2, 0, 2, 0],
+    [0, 2, 0, 2, 0, 2, 0, 2],
+    [2, 0, 2, 0, 2, 0, 2, 0]
+]
+
+# Initialize the board by copying the initial setup
+board = [row.copy() for row in initial_board]
+
+# Initialize Tkinter window
+root = tk.Tk()
+title_label = tk.Label(
+    root, text="Checkers Game", font=("Cambria", 24, "bold"), bg="#EEE", fg="darkred"
+)
+title_label.pack()
+
+# Create a canvas to draw the board and pieces
+canvas = tk.Canvas(root, width=cols * square_size, height=rows * square_size)
+canvas.pack()
+
+# Game state variables
+current_player = 1  # Start with Player 1 (red pieces)
+kills = {1: 0, 2: 0}  # Track number of pieces captured by each player
+kings = {1: 0, 2: 0}  # Track number of kings for each player
+
+# Define colors for players and kings
+player_colors = {1: "red", 2: "blue"}
+king_colors = {3: "gold", 4: "silver"}
+
+# Labels to display game statistics and current turn
+stats_label = tk.Label(root, text="", font=("Arial", 14))
+stats_label.pack()
+turn_label = tk.Label(root, text="", font=("Arial", 16))
+turn_label.pack()
+
+
+# -------------------------------
+# Evaluation Function for Player 1
+# -------------------------------
+
+class EvaluationFunction:
+    """
+    Evaluation function for assessing board states.
+    Uses a weighted sum of features:
+    - Number of Player 1's pieces
+    - Number of Player 2's pieces
+    - Number of Player 1's kings
+    - Number of Player 2's kings
+    """
+
+    def __init__(self):
+        # Weights for each feature
+        self.weights = np.array([1.5, -1.0, 3.0, -2.0])
+
+    def evaluate(self, board):
+        """
+        Evaluate the current board state.
+
+        Parameters:
+            board (list of lists): The current game board.
+
+        Returns:
+            float: The evaluation score.
+        """
+        # Count pieces and kings for both players
+        player_pieces = sum(cell == 1 for row in board for cell in row)
+        opponent_pieces = sum(cell == 2 for row in board for cell in row)
+        player_kings = sum(cell == 3 for row in board for cell in row)
+        opponent_kings = sum(cell == 4 for row in board for cell in row)
+
+        # Feature vector
+        features = np.array([player_pieces, opponent_pieces, player_kings, opponent_kings])
+
+        # Calculate weighted sum
+        return np.dot(self.weights, features)
+
+    def update_weights(self, gradient, learning_rate):
+        """
+        Update the weights based on the gradient and learning rate.
+
+        Parameters:
+            gradient (np.array): The gradient for weight update.
+            learning_rate (float): The learning rate.
+        """
+        self.weights += learning_rate * gradient
+
+
+# -------------------------------
+# Learning Agent for Player 1
+# -------------------------------
+
+class LearningAgent:
+    """
+    Learning agent that uses an evaluation function to choose moves.
+    Can train by simulating games and updating its evaluation function.
+    """
+
+    def __init__(self, eval_func, learning_rate=0.01):
+        """
+        Initialize the LearningAgent.
+
+        Parameters:
+            eval_func (EvaluationFunction): The evaluation function to use.
+            learning_rate (float): The learning rate for weight updates.
+        """
+        self.eval_func = eval_func
+        self.learning_rate = learning_rate
+
+    def choose_move(self, player, possible_moves, board):
+        """
+        Choose the best move based on the evaluation function.
+
+        Parameters:
+            player (int): The current player (1 or 2).
+            possible_moves (list of tuples): List of possible moves.
+            board (list of lists): The current game board.
+
+        Returns:
+            tuple: The chosen move as ((start_r, start_c), (end_r, end_c)).
+        """
+        best_move = None
+        best_score = float('-inf')
+
+        # Iterate through all possible moves to find the best one
+        for start, end in possible_moves:
+            # Create a temporary copy of the board to simulate the move
+            temp_board = [row.copy() for row in board]
+            self.simulate_move(temp_board, start, end, update_stats=False)
+
+            # Evaluate the resulting board state
+            score = self.eval_func.evaluate(temp_board)
+
+            # Select the move with the highest evaluation score
+            if score > best_score:
+                best_score = score
+                best_move = (start, end)
+
+        return best_move
+
+    def simulate_move(self, board, start, end, update_stats=True):
+        """
+        Simulate a move on the board.
+
+        Parameters:
+            board (list of lists): The game board to modify.
+            start (tuple): The starting position (row, col).
+            end (tuple): The ending position (row, col).
+            update_stats (bool): Whether to update global kill and king counts.
+
+        """
+        start_r, start_c = start
+        end_r, end_c = end
+        piece = board[start_r][start_c]
+
+        # Move the piece to the new position
+        board[end_r][end_c] = piece
+        board[start_r][start_c] = 0
+
+        # Handle capture if the move is a jump
+        if abs(end_r - start_r) == 2:
+            mid_r = (start_r + end_r) // 2
+            mid_c = (start_c + end_c) // 2
+            captured_piece = board[mid_r][mid_c]
+            board[mid_r][mid_c] = 0  # Remove the captured piece
+
+            # Update kill counts based on the captured piece
+            if captured_piece in [1, 3]:
+                if update_stats:
+                    kills[2] += 1
+            elif captured_piece in [2, 4]:
+                if update_stats:
+                    kills[1] += 1
+
+        # Handle king promotion
+        if piece == 1 and end_r == rows - 1 and board[end_r][end_c] != 3:
+            board[end_r][end_c] = 3
+            if update_stats:
+                kings[1] += 1
+        elif piece == 2 and end_r == 0 and board[end_r][end_c] != 4:
+            board[end_r][end_c] = 4
+            if update_stats:
+                kings[2] += 1
+
+        if update_stats:
+            update_stats_label()
+
+    def train(self, games=100):
+        """
+        Train the agent by simulating a number of games.
+
+        Parameters:
+            games (int): Number of games to simulate for training.
+        """
+        win_count = {1: 0, 2: 0}
+        for _ in range(games):
+            winner = self.simulate_game()
+            win_count[winner] += 1
+
+    def simulate_game(self):
+        """
+        Simulate a single game between Player 1 (learning agent) and Player 2 (heuristic/random).
+
+        Returns:
+            int: The winner of the game (1 or 2).
+        """
+        # Create a temporary copy of the initial board for simulation
+        temp_board = [row.copy() for row in initial_board]
+        player = 1  # Player 1 always starts
+
+        while True:
+            # Get all possible moves for the current player
+            possible_moves = get_all_possible_moves(player, temp_board)
+            if not possible_moves:
+                break  # No moves available, game over
+
+            if player == 1:
+                # Player 1's move using the learning agent
+                move = self.choose_move(player, possible_moves, temp_board)
+                if move:
+                    start, end = move
+                    self.simulate_move(temp_board, start, end, update_stats=False)
+            else:
+                # Player 2's move using a heuristic or random selection
+                move = choose_random_or_heuristic(player, possible_moves, temp_board)
+                if move:
+                    start, end = move
+                    self.simulate_move(temp_board, start, end, update_stats=False)
+
+            # Switch to the other player
+            player = 1 if player == 2 else 2
+
+        # Determine the winner (last player to move loses)
+        winner = 2 if player == 1 else 1
+
+        # Target score based on the winner
+        target_score = 100 if winner == 1 else -100
+        predicted_score = self.eval_func.evaluate(temp_board)
+
+        # Calculate gradient for weight update
+        gradient = (target_score - predicted_score) * np.array([1, -1, 1, -1])
+        self.eval_func.update_weights(gradient, self.learning_rate)
+
+        return winner
+
+
+# -------------------------------
+# Simple Heuristic for Player 2
+# -------------------------------
+
+def choose_random_or_heuristic(player, possible_moves, board):
+    """
+    Choose a move for Player 2 using a simple heuristic or randomly.
+
+    Parameters:
+        player (int): The current player (1 or 2).
+        possible_moves (list of tuples): List of possible moves.
+        board (list of lists): The current game board.
+
+    Returns:
+        tuple: The chosen move as ((start_r, start_c), (end_r, end_c)).
+    """
+    best_move = None
+    best_score = float('inf')
+
+    # Iterate through all possible moves to find the best one based on evaluation
+    for start, end in possible_moves:
+        temp_board = [row.copy() for row in board]
+        agent.simulate_move(temp_board, start, end, update_stats=False)
+        score = evaluation_function.evaluate(temp_board)
+
+        # Select the move with the lowest evaluation score for Player 2
+        if score < best_score:
+            best_score = score
+            best_move = (start, end)
+
+    # If no best move found, choose randomly
+    return best_move if best_move else random.choice(possible_moves)
+
+
+# -------------------------------
+# UI Update Functions
+# -------------------------------
+
+def update_stats_label():
+    """
+    Update the statistics label with the current kills and kings count.
+    """
+    stats_label.config(
+        text=f"Kills - Player 1: {kills[1]}, Player 2: {kills[2]}\n"
+             f"Kings - Player 1: {kings[1]}, Player 2: {kings[2]}"
+    )
+
+
+def draw_board():
+    """
+    Draw the checkers board on the canvas.
+    """
+    canvas.delete("board")  # Clear existing board drawings
+
+    for row in range(rows):
+        for col in range(cols):
+            # Alternate colors for the squares
+            color = "white" if (row + col) % 2 == 0 else "black"
+            canvas.create_rectangle(
+                col * square_size, row * square_size,
+                (col + 1) * square_size, (row + 1) * square_size,
+                fill=color, tags="board"
+            )
+
+
+def draw_pieces():
+    """
+    Draw the checkers pieces on the board.
+    """
+    canvas.delete("piece")  # Clear existing pieces
+
+    for row in range(rows):
+        for col in range(cols):
+            piece = board[row][col]
+            if piece != 0:
+                # Determine the color based on the piece type
+                color = king_colors.get(piece, player_colors.get(piece, "white"))
+                canvas.create_oval(
+                    col * square_size + 10, row * square_size + 10,
+                    (col + 1) * square_size - 10, (row + 1) * square_size - 10,
+                    fill=color, tags="piece"
+                )
+
+
+# -------------------------------
+# Game Logic Functions
+# -------------------------------
+
+def get_all_possible_moves(player, board):
+    """
+    Get all possible moves for the current player.
+
+    Parameters:
+        player (int): The current player (1 or 2).
+        board (list of lists): The current game board.
+
+    Returns:
+        list of tuples: List of possible moves as ((start_r, start_c), (end_r, end_c)).
+    """
+    possible_moves = []
+    for start_r in range(rows):
+        for start_c in range(cols):
+            # Check if the piece belongs to the current player
+            if board[start_r][start_c] in ([1, 3] if player == 1 else [2, 4]):
+                # Explore all possible directions for movement and jumps
+                for dr, dc in [(-1, -1), (-1, 1), (1, -1), (1, 1),
+                               (-2, -2), (-2, 2), (2, -2), (2, 2)]:
+                    end_r, end_c = start_r + dr, start_c + dc
+                    # Check if the move is valid
+                    if is_valid_move((start_r, start_c), (end_r, end_c), player, board):
+                        possible_moves.append(((start_r, start_c), (end_r, end_c)))
+    return possible_moves
+
+
+def is_valid_move(start, end, player, board):
+    """
+    Check if a move is valid.
+
+    Parameters:
+        start (tuple): Starting position (row, col).
+        end (tuple): Ending position (row, col).
+        player (int): The current player (1 or 2).
+        board (list of lists): The current game board.
+
+    Returns:
+        bool: True if the move is valid, False otherwise.
+    """
+    start_r, start_c = start
+    end_r, end_c = end
+
+    # Check if the end position is within the board boundaries
+    if not (0 <= end_r < rows and 0 <= end_c < cols):
+        return False
+
+    # Check if the end position is empty
+    if board[end_r][end_c] != 0:
+        return False
+
+    piece = board[start_r][start_c]
+
+    # Determine movement direction based on the piece type
+    if piece in [1, 3]:
+        direction = 1  # Player 1 moves downward
+    else:
+        direction = -1  # Player 2 moves upward
+
+    row_diff = end_r - start_r
+    col_diff = abs(end_c - start_c)
+
+    # Simple move (diagonal move by one square)
+    if col_diff == 1 and row_diff == direction:
+        return True
+
+    # Capture move (jump over opponent's piece)
+    if col_diff == 2 and row_diff == 2 * direction:
+        mid_r = (start_r + end_r) // 2
+        mid_c = (start_c + end_c) // 2
+        mid_piece = board[mid_r][mid_c]
+        # Check if the middle piece belongs to the opponent
+        return mid_piece in ([2, 4] if player == 1 else [1, 3])
+
+    return False
+
+
+# -------------------------------
+# Simulate Game Steps
+# -------------------------------
+
+def simulate_game_step():
+    """
+    Simulate a single step (move) in the game.
+    """
+    global current_player
+    possible_moves = get_all_possible_moves(current_player, board)
+
+    if not possible_moves:
+        # No possible moves, declare the winner
+        winner = "Player 1 (Red)" if current_player == 2 else "Player 2 (Blue)"
+        turn_label.config(text=f"Game Over! {winner} Wins!", fg="green")
+        return
+
+    if current_player == 1:
+        # Player 1's move using the learning agent
+        move = agent.choose_move(current_player, possible_moves, board)
+    else:
+        # Player 2's move using heuristic/random
+        move = choose_random_or_heuristic(current_player, possible_moves, board)
+
+    if move:
+        # Execute the chosen move
+        start, end = move
+        agent.simulate_move(board, start, end)  # update_stats=True by default
+        draw_pieces()
+        update_stats_label()
+
+    # Switch to the other player
+    current_player = 1 if current_player == 2 else 2
+    turn_label.config(
+        text=f"Player {current_player}'s Turn ({'Red' if current_player == 1 else 'Blue'})"
+    )
+
+    # Schedule the next game step after a short delay
+    root.after(500, simulate_game_step)
+
+
+# -------------------------------
+# Initialize Agent and Start Game
+# -------------------------------
+
+# Initialize the evaluation function
+evaluation_function = EvaluationFunction()
+
+# Initialize the learning agent with the evaluation function
+agent = LearningAgent(evaluation_function)
+
+# Print a message indicating that training is starting
+print("Training in progress, please wait...")
+
+# Train the agent by simulating 1000 games
+agent.train(games=1000)
+
+# Reset kill and king counts after training
+kills = {1: 0, 2: 0}
+kings = {1: 0, 2: 0}
+
+# Draw the initial board and pieces
+draw_board()
+draw_pieces()
+update_stats_label()
+
+# Set the initial turn label
+turn_label.config(text=f"Player {current_player}'s Turn ({'Red' if current_player == 1 else 'Blue'})")
+
+# Start simulating game steps
+simulate_game_step()
+
+# Start the Tkinter main loop
+root.mainloop()
