@@ -1,0 +1,290 @@
+#include <iostream>
+#include <vector>
+#include <queue>
+#include <unordered_map>
+#include <algorithm>
+#include <cmath> // For abs()
+#include <unordered_set>
+
+using namespace std;
+
+const int BOARD_SIZE = 3; // Dimension of the puzzle (3x3)
+
+/**
+ * @struct State
+ * @Represents a state of the puzzle board.
+ *
+ * Contains the current board configuration, position of the blank tile,
+ * cost to reach this state, heuristic value, and the sequence of moves
+ * leading to this state.
+ */
+struct State {
+    vector<vector<int>> board; /**< Current board configuration */
+    int blankRow, blankCol;    /**< Position of the blank tile */
+    int cost;                  /**< Cost to reach this state */
+    int heuristic;             /**< Heuristic (number of misplaced tiles) */
+    string moves;              /**< Sequence of moves leading to this state */
+
+    /**
+     * @brief Comparator for the priority queue.
+     *
+     * Orders states based on the sum of cost and heuristic (f = cost + heuristic).
+     * Lower f-values have higher priority.
+     *
+     * @param other The other state to compare with.
+     * @return True if this state has a higher f-value than the other.
+     */
+    bool operator<(const State &other) const {
+        return (cost + heuristic) > (other.cost + other.heuristic); // Compare total estimated cost
+    }
+};
+
+/**
+ * @Utility function to print the board.
+ *
+ * Displays the current state of the board, using '_' to represent the blank tile.
+ *
+ * @param board The board configuration to print.
+ */
+void printBoard(const vector<vector<int>> &board) {
+    for (const auto &row : board) {
+        for (int tile : row) {
+            if (tile == 0) {
+                cout << "_ "; // Display blank tile
+            } else {
+                cout << tile << " "; // Display tile number
+            }
+        }
+        cout << endl; // Newline after each row
+    }
+    cout << "-------------" << endl; // Separator between boards
+}
+
+/**
+ * @ Calculates the heuristic (number of misplaced tiles).
+ *
+ * Counts the number of tiles that are not in their goal position.
+ *
+ * @param board The current board configuration.
+ * @param goal The goal board configuration.
+ * @return The heuristic value (number of misplaced tiles).
+ */
+int calculateHeuristic(const vector<vector<int>> &board, const vector<vector<int>> &goal) {
+    int misplaced = 0;
+    for (int i = 0; i < BOARD_SIZE; ++i) {       // Iterate over rows
+        for (int j = 0; j < BOARD_SIZE; ++j) {   // Iterate over columns
+            if (board[i][j] != 0 && board[i][j] != goal[i][j]) {
+                ++misplaced; // Increment if tile is misplaced
+            }
+        }
+    }
+    return misplaced; // Return total number of misplaced tiles
+}
+
+/**
+ * @Checks if the board is the goal state.
+ *
+ * Compares the current board with the goal board.
+ *
+ * @param board The current board configuration.
+ * @param goal The goal board configuration.
+ * @return True if the current board matches the goal board.
+ */
+bool isGoal(const vector<vector<int>> &board, const vector<vector<int>> &goal) {
+    return board == goal; // Return true if boards are identical
+}
+
+/**
+ * @Generates a unique hash for a board state.
+ *
+ * Converts the board configuration into a string to be used in hashing.
+ *
+ * @param board The board configuration to hash.
+ * @return A string representing the hashed board state.
+ */
+string hashState(const vector<vector<int>> &board) {
+    string hash = "";
+    for (const auto &row : board) {
+        for (int tile : row) {
+            hash += to_string(tile) + ","; // Append each tile to the hash string
+        }
+    }
+    return hash; // Return the hash string
+}
+
+// Moves for the blank tile (up, down, left, right)
+const int rowOffsets[] = {-1, 1, 0, 0};     // Row offsets
+const int colOffsets[] = {0, 0, -1, 1};     // Column offsets
+const string moveDirections = "UDLR";       // U = Up, D = Down, L = Left, R = Right
+
+/**
+ * @Solves the 8-puzzle using the A* search algorithm.
+ *
+ * Attempts to find the shortest sequence of moves to reach the goal state from the start state.
+ *
+ * @param start The starting board configuration.
+ * @param goal The goal board configuration.
+ */
+void solvePuzzle(const vector<vector<int>> &start, const vector<vector<int>> &goal) {
+    priority_queue<State> openSet;             // Priority queue for the open set
+    unordered_map<string, int> costSoFar;      // Map to track the cost to reach each state
+    int nodesExpanded = 0;                     // Node expansion counter
+
+    // Find the initial position of the blank tile
+    int startBlankRow = -1, startBlankCol = -1;
+    for (int i = 0; i < BOARD_SIZE; ++i) {     // Iterate over rows
+        for (int j = 0; j < BOARD_SIZE; ++j) { // Iterate over columns
+            if (start[i][j] == 0) {            // Blank tile found
+                startBlankRow = i;
+                startBlankCol = j;
+                break;
+            }
+        }
+    }
+
+    // Initialize the starting state
+    State initialState = {
+        start,
+        startBlankRow,
+        startBlankCol,
+        0,                                      // Initial cost is 0
+        calculateHeuristic(start, goal),        // Calculate heuristic
+        ""                                      // No moves yet
+    };
+    openSet.push(initialState);
+    string startHash = hashState(start);
+    costSoFar[startHash] = 0; // Cost to reach the start state is 0
+
+    // A* Search Algorithm
+    while (!openSet.empty()) {
+        State current = openSet.top();          // Get state with lowest f-value
+        openSet.pop();
+        nodesExpanded++;                        // Increment node expansion counter
+
+        // If the goal state is reached, print the solution
+        if (isGoal(current.board, goal)) {
+            cout << "Solution found in " << current.cost << " moves." << endl;
+            cout << "Moves: " << current.moves << endl;
+            cout << "Number of nodes expanded: " << nodesExpanded << endl;
+
+            // Replay the solution step by step
+            cout << "Start State:" << endl;
+            printBoard(start);
+
+            int blankRow = startBlankRow, blankCol = startBlankCol;
+            vector<vector<int>> tempBoard = start;
+
+            for (char move : current.moves) {
+                int newBlankRow = blankRow, newBlankCol = blankCol;
+
+                // Determine the new position of the blank tile based on the move
+                if (move == 'U') newBlankRow -= 1;
+                if (move == 'D') newBlankRow += 1;
+                if (move == 'L') newBlankCol -= 1;
+                if (move == 'R') newBlankCol += 1;
+
+                // Swap the tiles
+                swap(tempBoard[blankRow][blankCol], tempBoard[newBlankRow][newBlankCol]);
+
+                // Update blank tile position
+                blankRow = newBlankRow;
+                blankCol = newBlankCol;
+
+                // Print the new state
+                printBoard(tempBoard);
+            }
+
+            cout << "Goal State:" << endl;
+            printBoard(goal);
+
+            return; // Solution found, exit the function
+        }
+
+        // Hash the current state
+        string boardHash = hashState(current.board);
+
+        // Check if this state has been reached with a lower cost
+        if (costSoFar.count(boardHash) && costSoFar[boardHash] < current.cost) {
+            continue; // Skip this state
+        }
+
+        costSoFar[boardHash] = current.cost; // Update the cost to reach this state
+
+        // Explore neighboring states
+        for (int i = 0; i < 4; ++i) {
+            int newBlankRow = current.blankRow + rowOffsets[i]; // Calculate new blank tile position
+            int newBlankCol = current.blankCol + colOffsets[i];
+
+            // Check bounds
+            if (newBlankRow >= 0 && newBlankRow < BOARD_SIZE &&
+                newBlankCol >= 0 && newBlankCol < BOARD_SIZE) {
+                // Create a new board by swapping the blank tile with the adjacent tile
+                vector<vector<int>> newBoard = current.board;
+                swap(newBoard[current.blankRow][current.blankCol], newBoard[newBlankRow][newBlankCol]);
+
+                // Calculate heuristic and create the new state
+                State newState = {
+                    newBoard,
+                    newBlankRow,
+                    newBlankCol,
+                    current.cost + 1,                           // Increment cost
+                    calculateHeuristic(newBoard, goal),         // Recalculate heuristic
+                    current.moves + moveDirections[i]           // Append move to moves string
+                };
+
+                string newBoardHash = hashState(newBoard);
+
+                // Check if this new state has been reached at a lower cost
+                if (!costSoFar.count(newBoardHash) || newState.cost < costSoFar[newBoardHash]) {
+                    costSoFar[newBoardHash] = newState.cost; // Update cost
+                    openSet.push(newState); // Add new state to open set
+                }
+            }
+        }
+    }
+
+    cout << "No solution found." << endl; // If open set is empty and no solution, report failure
+}
+
+/**
+ * @Reads a board state from user input.
+ *
+ * Prompts the user to enter the board configuration, using '0' to represent the blank space.
+ *
+ * @param prompt A message displayed to the user before input.
+ * @return The board configuration entered by the user.
+ */
+vector<vector<int>> readBoardState(const string &prompt) {
+    vector<vector<int>> board(BOARD_SIZE, vector<int>(BOARD_SIZE));
+    cout << prompt << endl;
+    cout << "Enter the numbers from 0 to 8 in any order, with 0 representing the blank space, separated by spaces:" << endl;
+    for (int i = 0; i < BOARD_SIZE; ++i) {    // Iterate over rows
+        for (int j = 0; j < BOARD_SIZE; ++j) { // Iterate over columns
+            cin >> board[i][j];               // Read each tile from input
+        }
+    }
+    return board; // Return the board configuration
+}
+
+/**
+ * @The main function of the program.
+ *
+ * Reads the start and goal states from the user and attempts to solve the puzzle.
+ *
+ * @return Exit status of the program.
+ */
+int main() {
+    // Read the start state from the user
+    vector<vector<int>> start = readBoardState("Enter the start state:");
+
+    // Read the goal state from the user
+    vector<vector<int>> goal = readBoardState("Enter the goal state:");
+
+    // Inform the user that the puzzle is being solved
+    cout << "Wait, solving puzzle..." << endl;
+
+    // Solve the puzzle
+    solvePuzzle(start, goal);
+
+    return 0; // Exit the program
+}

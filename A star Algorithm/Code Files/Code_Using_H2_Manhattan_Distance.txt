@@ -1,0 +1,263 @@
+#include <iostream>
+#include <vector>
+#include <queue>
+#include <unordered_map>
+#include <cmath> // For abs()
+#include <unordered_set>
+
+using namespace std;
+
+const int BOARD_SIZE = 3; // Dimension of the puzzle (3x3)
+
+/**
+ * @struct State
+ * @Represents a state of the puzzle board, including board configuration, blank tile position, cost, heuristic value, and move sequence.
+ */
+struct State {
+    vector<vector<int>> board; /**< Current board configuration */
+    int blankRow, blankCol;    /**< Position of the blank tile (0) */
+    int cost;                  /**< Cost to reach this state (number of moves) */
+    int heuristic;             /**< Heuristic value (Manhattan Distance) */
+    string moves;              /**< Sequence of moves leading to this state */
+
+    /**
+     * @brief Comparator for priority queue to prioritize states with lower (cost + heuristic).
+     */
+    bool operator<(const State &other) const {
+        return (cost + heuristic) > (other.cost + other.heuristic);
+    }
+};
+
+/**
+ * @Prints the puzzle board to the console in a formatted way.
+ * 
+ * @param board The current board configuration to print.
+ */
+void printBoard(const vector<vector<int>> &board) {
+    for (const auto &row : board) {
+        for (int tile : row) {
+            cout << (tile == 0 ? "_ " : to_string(tile) + " "); // Display blank tile as "_"
+        }
+        cout << endl;
+    }
+    cout << "-------------" << endl;
+}
+
+/**
+ * @Calculates the Manhattan Distance heuristic for the current board state.
+ * 
+ * @param board The current board configuration.
+ * @param goal The goal board configuration.
+ * @return int The Manhattan Distance between the current and goal board states.
+ */
+int calculateManhattanDistance(const vector<vector<int>> &board, const vector<vector<int>> &goal) {
+    int distance = 0;
+    unordered_map<int, pair<int, int>> goalPositions;
+
+    // Map each tile in the goal state to its position
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            goalPositions[goal[i][j]] = {i, j};
+        }
+    }
+
+    // Calculate Manhattan Distance for each tile
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            int tile = board[i][j];
+            if (tile != 0) { // Ignore the blank tile
+                int goalRow = goalPositions[tile].first;
+                int goalCol = goalPositions[tile].second;
+                distance += abs(i - goalRow) + abs(j - goalCol);
+            }
+        }
+    }
+
+    return distance;
+}
+
+/**
+ * @Checks if the current board state matches the goal state.
+ * 
+ * @param board The current board configuration.
+ * @param goal The goal board configuration.
+ * @return bool True if the current board matches the goal state, otherwise false.
+ */
+bool isGoalState(const vector<vector<int>> &board, const vector<vector<int>> &goal) {
+    return board == goal;
+}
+
+/**
+ * @Generates a unique hash string for a given board state to track visited states.
+ * 
+ * @param board The board configuration to hash.
+ * @return string A unique string representation of the board.
+ */
+string hashBoardState(const vector<vector<int>> &board) {
+    string hash;
+    for (const auto &row : board) {
+        for (int tile : row) {
+            hash += to_string(tile) + ","; // Concatenate tiles with a delimiter
+        }
+    }
+    return hash;
+}
+
+// Moves for the blank tile: Up, Down, Left, Right
+const int rowOffsets[] = {-1, 1, 0, 0};
+const int colOffsets[] = {0, 0, -1, 1};
+const string moveDirections = "UDLR"; // Move directions corresponding to offsets
+
+/**
+ * @Solves the 8-puzzle problem using the A* search algorithm with Manhattan distance as the heuristic.
+ * 
+ * @param start The starting board configuration.
+ * @param goal The goal board configuration.
+ */
+void solvePuzzle(const vector<vector<int>> &start, const vector<vector<int>> &goal) {
+    priority_queue<State> openSet; // Priority queue for A* search
+    unordered_map<string, int> costSoFar; // Tracks the lowest cost to reach each state
+    int nodesExpanded = 0; // Counter for the number of expanded nodes
+
+    // Find the initial position of the blank tile
+    int startBlankRow = -1, startBlankCol = -1;
+    for (int i = 0; i < BOARD_SIZE && startBlankRow == -1; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            if (start[i][j] == 0) { // Blank tile identified
+                startBlankRow = i;
+                startBlankCol = j;
+                break;
+            }
+        }
+    }
+
+    // Initialize the starting state
+    State initialState = {
+        start,
+        startBlankRow,
+        startBlankCol,
+        0, // Cost is zero at the start
+        calculateManhattanDistance(start, goal),
+        ""
+    };
+    openSet.push(initialState); // Add initial state to the priority queue
+    costSoFar[hashBoardState(start)] = 0; // Mark initial state's cost as 0
+
+    while (!openSet.empty()) {
+        State currentState = openSet.top();
+        openSet.pop();
+        nodesExpanded++; // Increment the node expansion counter
+
+        // If goal state is reached, print the solution
+        if (isGoalState(currentState.board, goal)) {
+            cout << "Solution found in " << currentState.cost << " moves." << endl;
+            cout << "Moves: " << currentState.moves << endl;
+            cout << "Number of nodes expanded: " << nodesExpanded << endl;
+
+            // Print the sequence of board states
+            cout << "Start State:" << endl;
+            printBoard(start);
+
+            int blankRow = startBlankRow, blankCol = startBlankCol;
+            vector<vector<int>> tempBoard = start;
+
+            for (char move : currentState.moves) {
+                int newBlankRow = blankRow, newBlankCol = blankCol;
+
+                // Update blank tile position based on the move
+                if (move == 'U') newBlankRow -= 1;
+                if (move == 'D') newBlankRow += 1;
+                if (move == 'L') newBlankCol -= 1;
+                if (move == 'R') newBlankCol += 1;
+
+                // Swap blank tile with its new position
+                swap(tempBoard[blankRow][blankCol], tempBoard[newBlankRow][newBlankCol]);
+
+                blankRow = newBlankRow;
+                blankCol = newBlankCol;
+
+                printBoard(tempBoard); // Print the current board state
+            }
+
+            cout << "Goal State:" << endl;
+            printBoard(goal); // Print the final goal state
+
+            return;
+        }
+
+        string boardHash = hashBoardState(currentState.board);
+
+        // Skip processing if a cheaper path to this state is already found
+        if (costSoFar[boardHash] < currentState.cost) {
+            continue;
+        }
+
+        // Explore all possible moves from the current state
+        for (int i = 0; i < 4; ++i) {
+            int newBlankRow = currentState.blankRow + rowOffsets[i];
+            int newBlankCol = currentState.blankCol + colOffsets[i];
+
+            // Check if the move is within bounds
+            if (newBlankRow >= 0 && newBlankRow < BOARD_SIZE &&
+                newBlankCol >= 0 && newBlankCol < BOARD_SIZE) {
+                vector<vector<int>> newBoard = currentState.board;
+
+                // Swap blank tile with the adjacent tile
+                swap(newBoard[currentState.blankRow][currentState.blankCol],
+                     newBoard[newBlankRow][newBlankCol]);
+
+                // Create a new state after the move
+                State newState = {
+                    newBoard,
+                    newBlankRow,
+                    newBlankCol,
+                    currentState.cost + 1, // Increment cost by 1
+                    calculateManhattanDistance(newBoard, goal),
+                    currentState.moves + moveDirections[i] // Append move to the sequence
+                };
+
+                string newBoardHash = hashBoardState(newBoard);
+
+                // Add the new state if it's better or not visited
+                if (!costSoFar.count(newBoardHash) || newState.cost < costSoFar[newBoardHash]) {
+                    costSoFar[newBoardHash] = newState.cost;
+                    openSet.push(newState); // Add new state to the priority queue
+                }
+            }
+        }
+    }
+
+    // If no solution is found, output failure message
+    cout << "No solution found." << endl;
+}
+
+/**
+ * @Reads a board state from user input.
+ * 
+ * @param prompt A prompt to display to the user.
+ * @return vector<vector<int>> The board configuration input by the user.
+ */
+vector<vector<int>> readBoardState(const string &prompt) {
+    vector<vector<int>> board(BOARD_SIZE, vector<int>(BOARD_SIZE));
+    cout << prompt << endl;
+    cout << "Enter the numbers from 0 to 8 in any order, with 0 representing the blank space, separated by spaces:" << endl;
+    for (int i = 0; i < BOARD_SIZE; ++i) {
+        for (int j = 0; j < BOARD_SIZE; ++j) {
+            cin >> board[i][j]; // Input each tile value
+        }
+    }
+    return board;
+}
+
+/**
+ * @The main function to run the program.
+ * 
+ * Reads the start and goal states, then solves the puzzle.
+ */
+int main() {
+    vector<vector<int>> start = readBoardState("Enter the start state:");
+    vector<vector<int>> goal = readBoardState("Enter the goal state:");
+    cout << "Wait, solving puzzle..." << endl;
+    solvePuzzle(start, goal); // Solve the puzzle using A* search
+    return 0;
+}
